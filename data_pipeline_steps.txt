@@ -1,6 +1,11 @@
+Data Pipeline
+
 Stage 1 :  Generate Medical Specialties
 
 Total Specialties : 590
+
+First filter on the medical specialties, we want to build the dataset for. As per the NUCC guidelines, there are 800+ specialties, however some of those specialties are not relevant for the PS project, as specialties like ambulance won't be searched using the PS platform, so we focus on those specialties where users are tying to find medical providers.
+
 
 Source Code : Users/shekhar_tanwar/ICD-ICD-Triplet/src/datasetbuilder/code-final-icd-cpt-dataset-builder/gpt_augmentation_pipeline/gpt_specialty_detection_pipeline_2.py
 
@@ -9,30 +14,29 @@ Stage 2 :  Generate Seed Queries Per Specialty
 
 This is a 7 step pipeline.
 
-Step 1 : First Use GPT 4.1 and create synthetic queries for each search category ( medical specialty_subspecialty ) <- completed
+Step 1 : First Use GPT 4.1 and create synthetic queries for each search category ( medical specialty_subspecialty ) 
 
-Source Code: Users/shekhar_icd/src/dataset/query_generator/Stage_2_step1_query_generator_07142025.py
+Source Code: Users/shekhar_icd/src/dataset/data_pipeline/Stage_2_step1_query_generator_07142025.py
 
 NOTE : The prompt used here is aligned with the query length from production logs. So whatever production logs come in, measure the length of the input sequence ( at token level ) and draw a historgram. Find a range of query lengths where the density of queries are. In this case 2 to 8 tokens length.
 
 NOTE : Total Queries Created  : 250
 
-Step 2 : Then, for the synthetic queries generated, verify if the queries are actually diagnositic in nature. If they are label them as diagnostic, else Procedural or Exclude.
-<- completed
+Step 2 : Then, for the synthetic queries generated, verify if the queries are actually diagnositic in nature. If they are, label them as diagnostic, else Procedural or Exclude.
+
 
 Source Code : Users/shekhar_icd/src/dataset/stage2_step2_gpt41_query_classification.py
 
-NOTE : Total Queries Filtered Percentage : 5.104923599320883
+NOTE : Total Queries Filtered Percentage : 5.104923599320883 % remaining ones were diagnostic queries
 
 
-Step 3 : Then, for the production queries , classify the queries into different NUCC specialties_subspecialty labels. <- completed
+Step 3 : Then, for the production queries , classify the queries into different NUCC specialties_subspecialty labels.
 
 
 Source Code : Users/shekhar_icd/src/dataset/stage2_step3_nucc_classifier_gpt41.py
 
-
-
-
+# then add The paraphrased queries back to the training set
+# and then add the original queries to the eval dataset
 
 NOTE : The production queries are classified into top 3 medical specialty_subspecialty by GPT.
 
@@ -41,25 +45,26 @@ NOTE : Each specialty ( not specilty_subspecialty) is then grouped on the number
 Analysis Results: Internal medicine , Pediatrics and Registered Nurse among the top 3 specialties.
 
 
-Step 4 : For the classified production queries, verify if they are diagnostic in nature, using the code for Step 2. <- completed
+Step 4 : For the classified production queries, verify if they are diagnostic in nature, using the code for Step 2. 
 
 Data Path ( classified queries ) : ../../datasets/datasets_augmented/augmentation_set3/ues_keyword_nucc_classification/ues_nucc_dataset.csv
 
-Step 5 : For the Filtered queries, filter out highly similar queries ( cosine similarity >= 0.95 ) by each medical specialty_subspecialty pair. <- completed
+Step 5 : For the Filtered queries, filter out highly similar queries ( cosine similarity >= 0.95 ) by each medical specialty_subspecialty pair.
 
 Step 6 : For the Filtered queries, create augmented versions of the query and add the augmented version to each medical specialty_subspecialty pair. <- completed
 
 Source Code : Users/shekhar_icd/src/dataset/data_pipeline/stage2_step5_step6.ipynb
 
-Step 7 : Keep the original production queries for evaluation <- completed
+Step 7 : Keep the original production queries for evaluation 
 
 Stage 3 : Generate ICD Codes
 
-Step 1 :  For the generated Queries ( N number of queries per specialty ) generate Two set of ICD codes, using GPT 4o and GPT 4.1 <- In progress
+Step 1 :  For the generated Queries ( N number of queries per specialty ) generate Two set of ICD codes, using GPT 4o and GPT 4.1 
 
 Source Code : Users/shekhar_icd/src/dataset/data_pipeline/stage3_step1_icd_generation_gpt4o_gpt41-v2.py
 
 Step 2 :  Once the List of ICD Codes are produced, do the following:
+
 	Step a : Refer the ICD reference lookup file to filter out hallucinated codes
 	Step b : For the remaining codes, refer to the descriptions from the ICD reference file and or generate detailed description from GPT 4o ( Research this step )
 	Step c :  Evaluation Loop : Feed the combined unique list of ICD codes along with text descriptions back to GPT 4.1 to filter out generic or unrelated codes
@@ -76,7 +81,7 @@ Frame this as a binary classification problem. And report metrics.
 
 Source Code : Users/shekhar_icd/src/dataset/data_pipeline/stage_4_step_1_specialty_verification.py
 
-Stage 5: Attach hard Negatives and Flatenning
+Stage 5: Attach hard Negatives and Flatten
 
 Step 1 :  For the specialty, ICD code pairs, attach negative samples
 
@@ -89,3 +94,62 @@ Step 2 : Flatten the Dataset and Create Train , Test , Eval set by Specialty
 Flatten the triplet dataset and then generate train, test, eval split by specialty.
 
 Source Code : Users/shekhar_icd/src/dataset/data_pipeline/stage_5_step2.py
+
+
+Query Diversity Selection Pipeline
+
+After you develop queries from GPT or load in UES queries, you can select diverse queries using the following scripts:
+
+
+Source Code : 
+
+
+Training Pipeline
+
+After the dataset is flattened, and we have a triplet dataset saved as a CSV file, with four columns -> specialty, anchor, positives and negatives, and we have split the dataset by train, eval and test set, we use the below distributed training pipeline to finetune the embedding models on the train set.
+
+Source Code : Users/shekhar_icd/src/model/bf16_sentence_embeddding_finetuning_icd_original_h100.py
+
+The code base enables users to run the finetuning on multiple GPU computes and train using different loss functions with option to specify their own hyperparameters. The training run is logged on Azure MLFlow and can be visualized to monitor for overfitting.
+
+NOTE : 
+
+The current training pipeline works fine for samples under 20M, after this point if you include more samples, then due to memory and GPU I/O related issues, the pipeline becomes reflects a larger ETA for total completion time but nevertheless still works and the model is trained normally as it is supposed to. The larger ETA only reflects the time the tensors are written to GPU for the model to train, this is not a bug but it can be made more efficient. Please develop a torch based pipeline in parallel. I made an effort, but due to time constraints couldn't work on that more. Here is the code for reference:
+
+Source Code : Users/shekhar_tanwar/ICD-ICD-Triplet/finetune/torch_training_scripts/
+
+Hyperparameter Tuning 
+
+If you prefer to choose better hyper-paramters, by doing a dry run on sample of the dataset and using the model you'd be funetuning, refer to the below code for running this test:
+
+NOTE : You would need to install Optuna backend for this, run the script, this creates a sample of the  dataset:
+
+Source Code : Script 1:- Users/shekhar_tanwar/ICD-ICD-Triplet/finetune/hyperparameter_tuning/script2_hyperparameter_search_optuna-v2.py
+
+This run the actual hyperparameter tuning test trials:
+
+Source Code : Script 3 ( Optimized ) :- Users/shekhar_tanwar/ICD-ICD-Triplet/finetune/hyperparameter_tuning/script3_hyperparameter_search_optuna-v3_Contrastive_loss.py
+
+Script 3  is optimized version of Script 2.
+
+
+Evaluation Pipeline
+
+After the model has been finetuned and we have the best model so far, we can plug in that model's path into the below evaluation script. 
+
+Source Code : Users/shekhar_icd/src/evaluation/evaluation_script_e5.py
+
+NOTE : The current evaluation runs on actual UES keywords. For each query I have attached relevant ICD codes, but if comparison needs to be done at a group level, just like CPT model, then a new approach needs to be developed.
+
+
+Model FP16 Export
+
+The source code to export the model to FP16 format, is as follows:
+
+Source Code : Users/shekhar_icd/src/inference/convert_to_fp16.py
+
+Plug in the model path in this script and you should have a compressed model.
+
+
+
+
